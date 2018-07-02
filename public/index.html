@@ -1,0 +1,135 @@
+<html>
+<head>
+    <style>
+        body, body {
+            padding: 0;
+            margin: 0;
+        }
+
+        canvas {
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+    <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+<script>
+const canvas = document.createElement('canvas')
+const ctx = canvas.getContext('2d')
+document.body.appendChild(canvas)
+
+canvas.width = window.innerWidth
+canvas.height = window.innerHeight
+
+ctx.fillStyle = 'lightblue'
+ctx.fillRect(0, 0, canvas.width, canvas.height)
+
+let state
+let myPlayer
+
+function render () {
+    requestAnimationFrame(render)
+    if (state == null) return
+
+    const { players, enemies, coins } = state
+
+    // borrar pantalla
+    ctx.globalAlpha = 0.2
+    ctx.fillStyle = 'white'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    ctx.globalAlpha = 1
+
+    ctx.save()
+
+    // center camera on player
+    ctx.translate(
+        canvas.width/2 - myPlayer.x,
+        canvas.height/2 - myPlayer.y
+    )
+
+    // coin render
+    coins.forEach(coin => {
+        ctx.fillStyle = 'yellow'
+        ctx.save()
+        ctx.translate(coin.x, coin.y)
+        ctx.rotate((Date.now() / 200) % (Math.PI*2))
+        ctx.fillRect(-coin.size/2,
+                     -coin.size/2,
+                     coin.size,
+                     coin.size)
+        ctx.restore()
+    })
+
+    // enemy render
+    const sizeFactor = (1-(Date.now() / 500 % 1)) + 1
+    enemies.forEach(enemy => {
+        ctx.fillStyle = 'red'
+        const size = enemy.size * sizeFactor
+        ctx.fillRect(
+            enemy.x - size/2,
+            enemy.y - size/2,
+            size,
+            size
+        )
+    })
+
+    // player render
+    players.forEach(player => {
+        if (player.dead) return
+        ctx.fillStyle = (player === myPlayer) ? 'blue' : 'green'
+        const size = 20
+        ctx.fillRect(player.x - player.size/2,
+            player.y - player.size/2,
+            player.size,
+            player.size)
+        ctx.textAlign = 'center'
+        ctx.font = '10px Helvetica'
+        ctx.fillText(
+            player.username,
+            player.x,
+            player.y + player.size/2 + 13)
+    })
+
+    ctx.restore()
+
+    players.sort((a, b) => b.score - a.score)
+    players.forEach((player, i) => {
+      ctx.fillStyle = (player === myPlayer)? 'blue' : 'green'
+      ctx.font = '20px Helvetica'
+      ctx.fillText(`${player.username}: ${player.score}`, 30, 40 + i*30)
+    })
+}
+requestAnimationFrame(render)
+
+const keyboard = {}
+
+const mapping = {
+    a: 'left',
+    d: 'right',
+    w: 'up',
+    s: 'down'
+}
+document.addEventListener('keydown', function (event) {
+    keyboard[mapping[event.key]] = true
+    socket.emit('input', keyboard)
+})
+document.addEventListener('keyup', function (event) {
+    keyboard[mapping[event.key]] = false
+    socket.emit('input', keyboard)
+})
+
+const socket = io()
+
+socket.emit('set-username', prompt('Username?'))
+
+socket.on('state', function (newState) {
+    state = newState
+    myPlayer = state.players.find(player => {
+        return (player.id === socket.id)
+    })
+})
+
+</script>
+</body>
+</html>
