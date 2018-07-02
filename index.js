@@ -63,8 +63,9 @@ function collision (obj1, obj2) {
 }
 
 const speed = 3
+const TURN_LENGTH = 20
 function logic () {
-  setTimeout(logic, 20)
+  setTimeout(logic, TURN_LENGTH)
 
   const { players, enemies, coins } = state
 

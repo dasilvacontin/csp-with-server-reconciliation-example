@@ -29,9 +29,111 @@ ctx.fillRect(0, 0, canvas.width, canvas.height)
 let state
 let myPlayer
 
+const WORLD_WIDTH = 500
+const WORLD_HEIGHT = 500
+const speed = 3
+const TURN_LENGTH = 20
+
+let turns = []
+const inputs = []
+let serverStateTs
+let clientStateTs
+
+function shallowCloneObject (obj) {
+    const copy = {}
+    for (let key in obj) copy[key] = obj[key]
+    return copy
+}
+
+function getLastTurn () {
+    return turns[turns.length - 1]
+}
+
+function predictATurn (previousTurn, myInput) {
+    // optimization: since there's no rollback that reuses state in memory,
+    // feel free to reuse objects and modify past turns, corrupting them.
+    // immutability doesn't matter if there's no reuse.
+    const { players, enemies } = previousTurn
+
+    players.forEach(player => {
+        if (player.dead) return
+
+        const { keyboard } = player
+
+        // if its own player, apply our inputs to predict their effect
+        if (player.id === socket.id) {
+            for (let key in myInput) keyboard[key] = myInput[key]
+        }
+
+        if (keyboard.left) player.x -= speed
+        if (keyboard.right) player.x += speed
+        if (keyboard.up) player.y -= speed
+        if (keyboard.down) player.y += speed
+    })
+
+    // enemy logic
+    enemies.forEach(enemy => {
+        enemy.x += enemy.vx
+        enemy.y += enemy.vy
+        if (enemy.x < 0 || WORLD_WIDTH < enemy.x) enemy.vx *= -1
+        if (enemy.y < 0 || WORLD_HEIGHT < enemy.y) enemy.vy *= -1
+    })
+
+    // previous turn has been mutated and now contains the next turn
+    return previousTurn
+}
+
+function getPresentState () {
+    // if still waiting to initialize
+    if (getLastTurn() == null || ping === Infinity) return
+
+    // if `serverStateTs` is when the turn's state was generated in the server,
+    // then we should have sent the input ideally at time 
+    // `(serverStateTs - ping - TURN_LENGTH/2)`, so that it arrives right
+    // between the turn's generation and the previous turn's generation
+    // (so that if ping varies, it's harder for the input to arrive one
+    // turn before or later than intended)
+
+    // wrong, this is assuming LL is small (e.g. 20ms). With a big LL it makes no sense to aim for the midle, since it can be bigger than ping itself.
+    // let's make a visualization
+
+    // Therefore we should be (ping + TURN_LENGTH/2) advanced to the server
+    
+
+    // the mother of conditions
+    // gonna end up making an interactive visualization for this condition at this pace
+    let turnsSinceThen = turns.length - 1
+
+    let its = 0
+    while (clientStateTs + (turnsSinceThen + 1)*TURN_LENGTH < Date.now()) {
+        its++
+        if (its > 10) debugger
+        const nextIndex = turns.length
+        const previousTurn = getLastTurn()
+        const myInput = inputs[nextIndex - 1]
+        turns.push(predictATurn(previousTurn, myInput))
+
+        if (inputs.length < turns.length) {
+            // A turn has actually been advanced (not resimulating past ones)
+            inputs.push(shallowCloneObject(myInput))
+            socket.emit('input', myInput)
+            console.log('sending input', JSON.stringify(myInput))
+        }
+
+        turnsSinceThen = turns.length - 1
+    }
+
+    return getLastTurn()
+}
+
 function render () {
     requestAnimationFrame(render)
-    if (state == null) return
+    const state = getPresentState()
+    if (state == null || socket.id == null) return
+
+    myPlayer = state.players.find(player => {
+        return (player.id === socket.id)
+    })
 
     const { players, enemies, coins } = state
 
@@ -109,11 +211,13 @@ function render () {
                  canvas.width - 30, 40)
     ctx.fillText(`clockDelta: ${clockDelta}`,
                  canvas.width - 30, 70)
+    ctx.fillText(`turnsAhead: ${turns.length - 1}`,
+                 canvas.width - 30, 100)
+    ctx.fillText(`msAhead: ${serverStateTs - clientStateTs}`,
+                 canvas.width - 30, 130)
     ctx.restore()
 }
 requestAnimationFrame(render)
-
-const keyboard = {}
 
 const mapping = {
     a: 'left',
@@ -122,12 +226,14 @@ const mapping = {
     s: 'down'
 }
 document.addEventListener('keydown', function (event) {
+    // modify last input in the array
+    const keyboard = inputs[inputs.length - 1]
     keyboard[mapping[event.key]] = true
-    socket.emit('input', keyboard)
 })
 document.addEventListener('keyup', function (event) {
+    // modify last input in the array
+    const keyboard = inputs[inputs.length - 1]
     keyboard[mapping[event.key]] = false
-    socket.emit('input', keyboard)
 })
 
 const socket = io()
@@ -152,10 +258,29 @@ socket.on('connect', function () {
 })
 
 socket.on('state', function (newState) {
-    state = newState
-    myPlayer = state.players.find(player => {
-        return (player.id === socket.id)
-    })
+    if (ping === Infinity) return
+    console.log('got state')
+
+    if (turns.length === 1) {
+        console.log('wtf')
+        // it means the game was initialized, running already
+        // yet we got a turn before it was predicted????
+    }
+
+    serverStateTs = Date.now() - ping
+    // calculate time when we should have generated the turn
+    clientStateTs = serverStateTs
+                        - ping
+                        - Math.min(Math.max(5, ping/5), TURN_LENGTH/2)
+    turns = [newState]
+
+    // the "initial turn" is one ahead from the one we had,
+    // so discard the first stored input
+    // TODO: improve this comment
+    inputs.shift()
+
+    // in case this is the first turn ever
+    if (inputs.length === 0) inputs.push({})
 })
 
 // socket.io already has 'ping' and 'pong' events
