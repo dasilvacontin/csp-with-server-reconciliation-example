@@ -15,6 +15,7 @@
 </head>
 <body>
 <script>
+'use strict'
 const canvas = document.createElement('canvas')
 const ctx = canvas.getContext('2d')
 document.body.appendChild(canvas)
@@ -99,6 +100,16 @@ function render () {
       ctx.font = '20px Helvetica'
       ctx.fillText(`${player.username}: ${player.score}`, 30, 40 + i*30)
     })
+
+    // render ping/clock data
+    ctx.save()
+    ctx.fillStyle = '#a0a0a0'
+    ctx.textAlign = 'right'
+    ctx.fillText(`ping: ${ping}`,
+                 canvas.width - 30, 40)
+    ctx.fillText(`clockDelta: ${clockDelta}`,
+                 canvas.width - 30, 70)
+    ctx.restore()
 }
 requestAnimationFrame(render)
 
@@ -121,13 +132,43 @@ document.addEventListener('keyup', function (event) {
 
 const socket = io()
 
-socket.emit('set-username', prompt('Username?'))
+let pingTs
+let ping = Infinity
+
+// difference in ms between server and client clock
+let clockDelta = 0
+// ping server<->client had when this delta was calculated
+// the smaller the ping, the more accurate the delta is
+let clockDeltaPing = Infinity
+
+function sendPing () {
+    pingTs = Date.now()
+    socket.emit('sync-ping')
+}
+
+socket.on('connect', function () {
+    socket.emit('set-username', prompt('Username?'))
+    sendPing()
+})
 
 socket.on('state', function (newState) {
     state = newState
     myPlayer = state.players.find(player => {
         return (player.id === socket.id)
     })
+})
+
+// socket.io already has 'ping' and 'pong' events
+// gotta be careful and not use the same name
+socket.on('sync-pong', function (serverPastTs) {
+    const now = Date.now()
+    ping = (now - pingTs) / 2
+    if (ping <= clockDeltaPing) {
+        clockDeltaPing = ping
+        const serverNowTs = serverPastTs + ping
+        clockDelta = serverNowTs - now
+    }
+    setTimeout(sendPing, 300)
 })
 
 </script>

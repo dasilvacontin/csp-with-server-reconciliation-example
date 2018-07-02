@@ -141,6 +141,10 @@ io.on('connection', socket => {
     player.keyboard = keyboard
   })
 
+  socket.on('sync-ping', () => {
+    socket.emit('sync-pong', Date.now())
+  })
+
   socket.on('disconnect', function () {
     state.players.splice(state.players.indexOf(player), 1)
   })
