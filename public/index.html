@@ -53,9 +53,13 @@ let serverStateTs
 let clientStateTs
 let arrivalErrorMarginMs
 
-function shallowCloneObject (obj) {
+function deepCopyObject (obj) {
     const copy = {}
-    for (let key in obj) copy[key] = obj[key]
+    for (let key in obj) {
+        let value = obj[key]
+        if (typeof value === 'object') value = deepCopyObject(value)
+        copy[key] = value
+    }
     return copy
 }
 
@@ -64,12 +68,16 @@ function getLastTurn () {
 }
 
 function predictATurn (previousTurn, myInput, turnIndex) {
-    // optimization: since there's no rollback that reuses state in memory,
-    // feel free to reuse objects and modify past turns, corrupting them.
-    // immutability doesn't matter if there's no reuse.
-    const { players, enemies } = previousTurn
+    const nextTurn = {
+        players: [],
+        enemies: [],
+        coins: previousTurn.coins
+    }
 
-    players.forEach(player => {
+    previousTurn.players.forEach(player => {
+        player = deepCopyObject(player)
+        nextTurn.players.push(player)
+
         if (player.dead) return
 
         const { keyboard } = player
@@ -90,17 +98,19 @@ function predictATurn (previousTurn, myInput, turnIndex) {
     })
 
     // enemy logic
-    if (config.cspOnEnemies) {
-        enemies.forEach(enemy => {
+    previousTurn.enemies.forEach(enemy => {
+        enemy = deepCopyObject(enemy)
+        nextTurn.enemies.push(enemy)
+
+        if (config.cspOnEnemies) {
             enemy.x += enemy.vx
             enemy.y += enemy.vy
             if (enemy.x < 0 || WORLD_WIDTH < enemy.x) enemy.vx *= -1
             if (enemy.y < 0 || WORLD_HEIGHT < enemy.y) enemy.vy *= -1
-        })
-    }
+        }
+    })
 
-    // previous turn has been mutated and now contains the next turn
-    return previousTurn
+    return nextTurn
 }
 
 function nextTurnTs () {
@@ -148,7 +158,7 @@ function getPresentState () {
 
         if (inputs.length < turns.length) {
             // A turn has actually been advanced (not resimulating past ones)
-            inputs.push(shallowCloneObject(myInput))
+            inputs.push(deepCopyObject(myInput))
             socket.emit('input', myInput)
             console.log('sending input', JSON.stringify(myInput))
         }
@@ -159,30 +169,14 @@ function getPresentState () {
     return getLastTurn()
 }
 
-function render () {
-    requestAnimationFrame(render)
-    const state = getLastTurn()
-    if (state == null || socket.id == null) return
-
-    myPlayer = state.players.find(player => {
-        return (player.id === socket.id)
-    })
-
+// So that you can render both the server state and the predicted state
+// with different opacities
+function renderState (state) {
     const { players, enemies, coins } = state
 
-    // borrar pantalla
-    // ctx.globalAlpha = 0.2
-    ctx.fillStyle = 'white'
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
-    ctx.globalAlpha = 1
-
-    ctx.save()
-
-    // center camera on player
-    ctx.translate(
-        canvas.width/2 - myPlayer.x,
-        canvas.height/2 - myPlayer.y
-    )
+    const myPlayer = players.find(player => {
+        return (player.id === socket.id)
+    })
 
     // coin render
     coins.forEach(coin => {
@@ -226,11 +220,42 @@ function render () {
             player.x,
             player.y + player.size/2 + 13)
     })
+}
+
+function render () {
+    requestAnimationFrame(render)
+    const predictedState = getLastTurn()
+    if (predictedState == null || socket.id == null) return
+
+    myPlayer = predictedState.players.find(player => {
+        return (player.id === socket.id)
+    })
+
+    // clear screen
+    ctx.fillStyle = 'white'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    ctx.globalAlpha = 1
+
+    ctx.save()
+
+    // center camera on player
+    ctx.translate(
+        canvas.width/2 - myPlayer.x,
+        canvas.height/2 - myPlayer.y
+    )
+
+    ctx.globalAlpha = 0.2
+    const serverState = turns[0]
+    renderState(serverState)
+
+    ctx.globalAlpha = 1
+    renderState(predictedState)
 
     ctx.restore()
 
-    players.sort((a, b) => b.score - a.score)
-    players.forEach((player, i) => {
+    // render scoreboard
+    predictedState.players.sort((a, b) => b.score - a.score)
+    predictedState.players.forEach((player, i) => {
       ctx.fillStyle = (player === myPlayer)? 'blue' : 'green'
       ctx.font = '20px Helvetica'
       ctx.fillText(`${player.username}: ${player.score}`, 30, 40 + i*30)
@@ -307,7 +332,7 @@ socket.on('state', function (newState) {
 
     serverStateTs = Date.now() - ping
     // calculate time when we should have generated the turn
-    arrivalErrorMarginMs = Math.min(Math.max(8, ping/5), TURN_LENGTH/2)
+    arrivalErrorMarginMs = Math.min(10, TURN_LENGTH/2)
     clientStateTs = serverStateTs
                         - ping
                         - arrivalErrorMarginMs // buffer
