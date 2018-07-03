@@ -86,7 +86,7 @@ function predictNextTurn (previousTurn, myInput, turnIndex) {
         const itsMe = (player.id === socket.id)
         // predict if necessary
         if ((config.cspOnSelf && itsMe) ||
-            (config.cspOnOtherPlayers && turnIndex <= config.maxOtherPlayersPrediction)) {
+            (config.cspOnOtherPlayers && !itsMe && turnIndex <= config.maxOtherPlayersPrediction)) {
             const { keyboard } = player
 
             // if its us, apply our inputs to predict their effect
@@ -152,9 +152,9 @@ function getPresentState () {
 
     // while the time the next turn should happen is previous to
     // the current time, predict/advance to the next turn
-    while (nextTurnTs() < Date.now()) {
+    while (nextTurnTs() <= Date.now()) {
         const nextTurnIndex = turns.length // relative to the server turn
-        const previousTurn = getLastTurn()
+        const previousTurn = turns[nextTurnIndex - 1]
         const myInput = inputs[nextTurnIndex - 1]
 
         // (state X) + (inputs between state X and X+1)
