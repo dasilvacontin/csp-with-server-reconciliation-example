@@ -83,6 +83,20 @@ function predictATurn (previousTurn, myInput) {
     return previousTurn
 }
 
+function nextTurnTs () {
+    const turnsSinceThen = turns.length - 1
+    return clientStateTs + (turnsSinceThen + 1)*TURN_LENGTH
+}
+
+let nextLogicTimeout
+function scheduleLogic () {
+    clearTimeout(nextLogicTimeout)
+    const nTT = nextTurnTs()
+    const timeout = nTT - Date.now()
+    console.log(`scheduling for next turn ${nTT}\nwhich is in ${timeout} ms`)
+    nextLogicTimeout = setTimeout(getPresentState, timeout)
+}
+
 function getPresentState () {
     // if still waiting to initialize
     if (getLastTurn() == null || ping === Infinity) return
@@ -102,12 +116,11 @@ function getPresentState () {
 
     // the mother of conditions
     // gonna end up making an interactive visualization for this condition at this pace
-    let turnsSinceThen = turns.length - 1
 
     let its = 0
-    while (clientStateTs + (turnsSinceThen + 1)*TURN_LENGTH < Date.now()) {
+    while (nextTurnTs() < Date.now()) {
         its++
-        if (its > 10) debugger
+        if (its > 100) debugger
         const nextIndex = turns.length
         const previousTurn = getLastTurn()
         const myInput = inputs[nextIndex - 1]
@@ -119,16 +132,16 @@ function getPresentState () {
             socket.emit('input', myInput)
             console.log('sending input', JSON.stringify(myInput))
         }
-
-        turnsSinceThen = turns.length - 1
     }
+
+    scheduleLogic()
 
     return getLastTurn()
 }
 
 function render () {
     requestAnimationFrame(render)
-    const state = getPresentState()
+    const state = getLastTurn()
     if (state == null || socket.id == null) return
 
     myPlayer = state.players.find(player => {
@@ -228,11 +241,13 @@ const mapping = {
 document.addEventListener('keydown', function (event) {
     // modify last input in the array
     const keyboard = inputs[inputs.length - 1]
+    if (!keyboard) return
     keyboard[mapping[event.key]] = true
 })
 document.addEventListener('keyup', function (event) {
     // modify last input in the array
     const keyboard = inputs[inputs.length - 1]
+    if (!keyboard) return
     keyboard[mapping[event.key]] = false
 })
 
@@ -262,25 +277,31 @@ socket.on('state', function (newState) {
     console.log('got state')
 
     if (turns.length === 1) {
-        console.log('wtf')
         // it means the game was initialized, running already
         // yet we got a turn before it was predicted????
+        console.log('got turn from the server before it was predicted 👌')
+        const now = Date.now()
+        debugger
     }
 
     serverStateTs = Date.now() - ping
     // calculate time when we should have generated the turn
     clientStateTs = serverStateTs
                         - ping
-                        - Math.min(Math.max(5, ping/5), TURN_LENGTH/2)
+                        - Math.min(Math.max(8, ping/5), TURN_LENGTH/2) // buffer
     turns = [newState]
 
-    // the "initial turn" is one ahead from the one we had,
-    // so discard the first stored input
-    // TODO: improve this comment
-    inputs.shift()
+    // the new "initial/base truth turn" is one ahead from the one we had
+    // previously, so discard the first stored input, which belonged to it
+    const prevInput = inputs.shift() || {}
 
-    // in case this is the first turn ever
-    if (inputs.length === 0) inputs.push({})
+    // in case this is the first turn ever, initialize the array
+    // using prevInput just as a "mess-up" precaution
+    if (inputs.length === 0) inputs.push(prevInput)
+
+    // resimulate and schedule next logic turn
+    getPresentState()
+    console.log('end of got state')
 })
 
 // socket.io already has 'ping' and 'pong' events
