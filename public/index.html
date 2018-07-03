@@ -81,7 +81,7 @@ function predictATurn (previousTurn, myInput, turnIndex) {
         }
 
         if ((config.cspOnSelf && itsMe) ||
-            (config.cspOnOtherPlayers && config.maxOtherPlayersPrediction <= turnIndex)) {
+            (config.cspOnOtherPlayers && turnIndex <= config.maxOtherPlayersPrediction)) {
             if (keyboard.left) player.x -= speed
             if (keyboard.right) player.x += speed
             if (keyboard.up) player.y -= speed
@@ -303,8 +303,6 @@ socket.on('state', function (newState) {
         // it means the game was initialized, running already
         // yet we got a turn before it was predicted????
         console.log('got turn from the server before it was predicted 👌')
-        const now = Date.now()
-        debugger
     }
 
     serverStateTs = Date.now() - ping
