@@ -12,6 +12,7 @@
         }
     </style>
     <script src="/socket.io/socket.io.js"></script>
+    <script src="Constants.js"></script>
     <script src="dat.gui.min.js"></script>
 </head>
 <body>
@@ -36,20 +37,20 @@ document.body.appendChild(canvas)
 canvas.width = window.innerWidth
 canvas.height = window.innerHeight
 
-ctx.fillStyle = 'lightblue'
-ctx.fillRect(0, 0, canvas.width, canvas.height)
-
-let state
-let myPlayer
-
-const WORLD_WIDTH = 500
-const WORLD_HEIGHT = 500
-const speed = 3
-const TURN_LENGTH = 20
+const {
+    WORLD_WIDTH,
+    WORLD_HEIGHT,
+    PLAYER_SPEED,
+    TURN_LENGTH
+} = Constants
 
 let turns = []
 const inputs = []
+
+// time when the last server turn/state was generated
 let serverStateTs
+// time when the same turn should have been generated in the client
+// (advanced to the server so that the inputs get there in time)
 let clientStateTs
 let arrivalErrorMarginMs
 
@@ -67,33 +68,38 @@ function getLastTurn () {
     return turns[turns.length - 1]
 }
 
-function predictATurn (previousTurn, myInput, turnIndex) {
+function predictNextTurn (previousTurn, myInput, turnIndex) {
     const nextTurn = {
         players: [],
         enemies: [],
+        // vvv not being modified, so no need to clone
         coins: previousTurn.coins
     }
 
+    // player logic
     previousTurn.players.forEach(player => {
         player = deepCopyObject(player)
         nextTurn.players.push(player)
 
         if (player.dead) return
 
-        const { keyboard } = player
-
-        // if its own player, apply our inputs to predict their effect
         const itsMe = (player.id === socket.id)
-        if (itsMe) {
-            for (let key in myInput) keyboard[key] = myInput[key]
-        }
-
+        // predict if necessary
         if ((config.cspOnSelf && itsMe) ||
             (config.cspOnOtherPlayers && turnIndex <= config.maxOtherPlayersPrediction)) {
-            if (keyboard.left) player.x -= speed
-            if (keyboard.right) player.x += speed
-            if (keyboard.up) player.y -= speed
-            if (keyboard.down) player.y += speed
+            const { keyboard } = player
+
+            // if its us, apply our inputs to predict their effect
+            if (itsMe) {
+                for (let key in myInput) {
+                    keyboard[key] = myInput[key]
+                }
+            }
+
+            if (keyboard.left) player.x -= PLAYER_SPEED
+            if (keyboard.right) player.x += PLAYER_SPEED
+            if (keyboard.up) player.y -= PLAYER_SPEED
+            if (keyboard.down) player.y += PLAYER_SPEED
         }
     })
 
@@ -102,81 +108,85 @@ function predictATurn (previousTurn, myInput, turnIndex) {
         enemy = deepCopyObject(enemy)
         nextTurn.enemies.push(enemy)
 
+        // predict if necessary
         if (config.cspOnEnemies) {
             enemy.x += enemy.vx
             enemy.y += enemy.vy
-            if (enemy.x < 0 || WORLD_WIDTH < enemy.x) enemy.vx *= -1
-            if (enemy.y < 0 || WORLD_HEIGHT < enemy.y) enemy.vy *= -1
+            if (enemy.x < 0 || WORLD_WIDTH < enemy.x) {
+                enemy.vx *= -1 
+            }
+            if (enemy.y < 0 || WORLD_HEIGHT < enemy.y) {
+                enemy.vy *= -1
+            }
         }
     })
 
     return nextTurn
 }
 
+// the time when the game should advance to the next turn
 function nextTurnTs () {
     const turnsSinceThen = turns.length - 1
-    return clientStateTs + (turnsSinceThen + 1)*TURN_LENGTH
+    return clientStateTs + (turnsSinceThen+1)*TURN_LENGTH
 }
 
+// set up a timer so that our game simulation advances to the next turn
+// right when it should. calculating the next turn also triggers sending
+// our inputs for the turn, so this is important to happen in a timely manner
 let nextLogicTimeout
 function scheduleLogic () {
+    // clears the existing timer, if any was set up previously
     clearTimeout(nextLogicTimeout)
+
     const nTT = nextTurnTs()
     const timeout = nTT - Date.now()
-    console.log(`scheduling for next turn ${nTT}\nwhich is in ${timeout} ms`)
     nextLogicTimeout = setTimeout(getPresentState, timeout)
 }
 
+// obtains the state of the client's current turn. predicts and/or resimulates
+// any turns if necessary. predicting a new turn causes the client to send
+// the inputs used for that new turn to the server.
 function getPresentState () {
-    // if still waiting to initialize
+    // if still waiting to get initialized by the server
     if (getLastTurn() == null || ping === Infinity) return
 
-    // if `serverStateTs` is when the turn's state was generated in the server,
-    // then we should have sent the input ideally at time 
-    // `(serverStateTs - ping - TURN_LENGTH/2)`, so that it arrives right
-    // between the turn's generation and the previous turn's generation
-    // (so that if ping varies, it's harder for the input to arrive one
-    // turn before or later than intended)
-
-    // wrong, this is assuming LL is small (e.g. 20ms). With a big LL it makes no sense to aim for the midle, since it can be bigger than ping itself.
-    // let's make a visualization
-
-    // Therefore we should be (ping + TURN_LENGTH/2) advanced to the server
-    
-
-    // the mother of conditions
-    // gonna end up making an interactive visualization for this condition at this pace
-
-    let its = 0
+    // while the time the next turn should happen is previous to
+    // the current time, predict/advance to the next turn
     while (nextTurnTs() < Date.now()) {
-        its++
-        if (its > 100) debugger
-        const nextIndex = turns.length
+        const nextTurnIndex = turns.length // relative to the server turn
         const previousTurn = getLastTurn()
-        const myInput = inputs[nextIndex - 1]
-        turns.push(predictATurn(previousTurn, myInput, nextIndex))
+        const myInput = inputs[nextTurnIndex - 1]
 
+        // (state X) + (inputs between state X and X+1)
+        // are used to calculate (state X+1).
+        // `nextTurnIndex` is used in case we've got some entities
+        // that we want to predict only for `n` turns after the server
+        // turn, as to reduce the potential correction amount.
+        const nextTurn = predictNextTurn(previousTurn, myInput, nextTurnIndex)
+        turns.push(nextTurn)
+
+        // if we don't have an input stored for the turn, it means that we are
+        // predicting a NEW turn, not resimulating + applying existing inputs
+        // therefore we must send the inputs we've collected to the server
         if (inputs.length < turns.length) {
-            // A turn has actually been advanced (not resimulating past ones)
+            // clone current input to use it as starting input state
+            // to carry on keys that are held down
             inputs.push(deepCopyObject(myInput))
             socket.emit('input', myInput)
-            console.log('sending input', JSON.stringify(myInput))
         }
     }
 
+    // set up a timer to execute this again the moment the game needs to
+    // advance a turn
     scheduleLogic()
 
     return getLastTurn()
 }
 
 // So that you can render both the server state and the predicted state
-// with different opacities
+// with different opacities – good for debugging / understanding
 function renderState (state) {
     const { players, enemies, coins } = state
-
-    const myPlayer = players.find(player => {
-        return (player.id === socket.id)
-    })
 
     // coin render
     coins.forEach(coin => {
@@ -205,6 +215,9 @@ function renderState (state) {
     })
 
     // player render
+    const myPlayer = players.find(player => {
+        return (player.id === socket.id)
+    })
     players.forEach(player => {
         if (player.dead) return
         ctx.fillStyle = (player === myPlayer) ? 'blue' : 'green'
@@ -227,10 +240,6 @@ function render () {
     const predictedState = getLastTurn()
     if (predictedState == null || socket.id == null) return
 
-    myPlayer = predictedState.players.find(player => {
-        return (player.id === socket.id)
-    })
-
     // clear screen
     ctx.fillStyle = 'white'
     ctx.fillRect(0, 0, canvas.width, canvas.height)
@@ -239,6 +248,9 @@ function render () {
     ctx.save()
 
     // center camera on player
+    const myPlayer = predictedState.players.find(player => {
+        return (player.id === socket.id)
+    })
     ctx.translate(
         canvas.width/2 - myPlayer.x,
         canvas.height/2 - myPlayer.y
@@ -261,7 +273,7 @@ function render () {
       ctx.fillText(`${player.username}: ${player.score}`, 30, 40 + i*30)
     })
 
-    // render ping/clock data
+    // render networking data
     ctx.save()
     ctx.translate(0, canvas.height - 190)
     ctx.fillStyle = '#a0a0a0'
@@ -306,7 +318,8 @@ let ping = Infinity
 
 // difference in ms between server and client clock
 let clockDelta = 0
-// ping server<->client had when this delta was calculated
+
+// ping we had when the clockDelta was calculated
 // the smaller the ping, the more accurate the delta is
 let clockDeltaPing = Infinity
 
@@ -315,44 +328,8 @@ function sendPing () {
     socket.emit('sync-ping')
 }
 
-socket.on('connect', function () {
-    socket.emit('set-username', prompt('Username?'))
-    sendPing()
-})
-
-socket.on('state', function (newState) {
-    if (ping === Infinity) return
-    console.log('got state')
-
-    if (turns.length === 1) {
-        // it means the game was initialized, running already
-        // yet we got a turn before it was predicted????
-        console.log('got turn from the server before it was predicted 👌')
-    }
-
-    serverStateTs = Date.now() - ping
-    // calculate time when we should have generated the turn
-    arrivalErrorMarginMs = Math.min(10, TURN_LENGTH/2)
-    clientStateTs = serverStateTs
-                        - ping
-                        - arrivalErrorMarginMs // buffer
-    turns = [newState]
-
-    // the new "initial/base truth turn" is one ahead from the one we had
-    // previously, so discard the first stored input, which belonged to it
-    const prevInput = inputs.shift() || {}
-
-    // in case this is the first turn ever, initialize the array
-    // using prevInput just as a "mess-up" precaution
-    if (inputs.length === 0) inputs.push(prevInput)
-
-    // resimulate and schedule next logic turn
-    getPresentState()
-    console.log('end of got state')
-})
-
 // socket.io already has 'ping' and 'pong' events
-// gotta be careful and not use the same name
+// gotta be careful and not use the same name, otherwise won't work
 socket.on('sync-pong', function (serverPastTs) {
     const now = Date.now()
     ping = (now - pingTs) / 2
@@ -364,6 +341,50 @@ socket.on('sync-pong', function (serverPastTs) {
     setTimeout(sendPing, 300)
 })
 
+socket.on('connect', function () {
+    socket.emit('set-username', prompt('Username?'))
+    sendPing()
+})
+
+socket.on('state', function (newState) {
+    // if we don't have the ping, we can't calculate related turn data,
+    // such as when was it generated, so ignore until then
+    if (ping === Infinity) return
+
+    if (turns.length === 1) {
+        // it means the game was initialized, running already
+        // yet we got a turn before it was predicted????
+        console.log('got turn from the server before it was predicted 👌')
+    }
+
+    // calculate the aprox actual time when the server generated the turn
+    serverStateTs = Date.now() - ping
+
+    // calculate time when we should have generated the turn, so that inputs
+    // would have gotten in time to the server
+    // (inputs are sent when the turn is generated)
+    arrivalErrorMarginMs = Math.min(10, TURN_LENGTH/2)
+    clientStateTs = serverStateTs
+                        - ping
+                        - arrivalErrorMarginMs // buffer for ping variation
+    
+    // reset turn array. input array is kept in tact. turns will be
+    // re-simulated using this new server state as a starting point, and
+    // applying the stored inputs (if prediction/csp is used)
+    turns = [newState]
+
+    // the new "initial/base truth turn" is one ahead from the one we
+    // previously had, so discard the first stored input,
+    // which belonged to that turn we no longer have
+    const prevInput = inputs.shift() || {}
+
+    // in case this is the first turn ever, initialize the array
+    // using prevInput just as a "mess-up" precaution
+    if (inputs.length === 0) inputs.push(prevInput)
+
+    // resimulate and schedule next logic turn
+    getPresentState()
+})
 </script>
 </body>
 </html>

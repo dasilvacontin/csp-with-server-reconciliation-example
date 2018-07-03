@@ -6,6 +6,12 @@ var server = require('http').createServer(app)
 var io = require('socket.io')(server)
 const randomId = require('random-id')
 var port = process.env.PORT || 3000
+const {
+  WORLD_WIDTH,
+  WORLD_HEIGHT,
+  PLAYER_SPEED,
+  TURN_LENGTH
+} = require('./public/Constants.js')
 
 server.listen(port, () => {
   console.log('Server listening at port %d', port)
@@ -19,9 +25,6 @@ const state = {
   enemies: [],
   coins: []
 }
-
-const WORLD_WIDTH = 500
-const WORLD_HEIGHT = 500
 
 function reset () {
   const { players, enemies, coins } = state
@@ -62,8 +65,6 @@ function collision (obj1, obj2) {
     (Math.abs(obj1.y - obj2.y) < sizeSum)
 }
 
-const speed = 3
-const TURN_LENGTH = 20
 function logic () {
   setTimeout(logic, TURN_LENGTH)
 
@@ -74,10 +75,10 @@ function logic () {
     if (player.dead) return
 
     const { keyboard } = player
-    if (keyboard.left) player.x -= speed
-    if (keyboard.right) player.x += speed
-    if (keyboard.up) player.y -= speed
-    if (keyboard.down) player.y += speed
+    if (keyboard.left) player.x -= PLAYER_SPEED
+    if (keyboard.right) player.x += PLAYER_SPEED
+    if (keyboard.up) player.y -= PLAYER_SPEED
+    if (keyboard.down) player.y += PLAYER_SPEED
   })
 
   // enemy logic
