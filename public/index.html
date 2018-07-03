@@ -12,10 +12,23 @@
         }
     </style>
     <script src="/socket.io/socket.io.js"></script>
+    <script src="dat.gui.min.js"></script>
 </head>
 <body>
 <script>
 'use strict'
+
+// config
+const config = {
+    cspOnEnemies: false,
+    cspOnOtherPlayers: false,
+    maxOtherPlayersPrediction: 4,
+    cspOnSelf: false
+}
+
+const gui = new dat.GUI()
+for (let param in config) gui.add(config, param)
+
 const canvas = document.createElement('canvas')
 const ctx = canvas.getContext('2d')
 document.body.appendChild(canvas)
@@ -50,7 +63,7 @@ function getLastTurn () {
     return turns[turns.length - 1]
 }
 
-function predictATurn (previousTurn, myInput) {
+function predictATurn (previousTurn, myInput, turnIndex) {
     // optimization: since there's no rollback that reuses state in memory,
     // feel free to reuse objects and modify past turns, corrupting them.
     // immutability doesn't matter if there's no reuse.
@@ -62,23 +75,29 @@ function predictATurn (previousTurn, myInput) {
         const { keyboard } = player
 
         // if its own player, apply our inputs to predict their effect
-        if (player.id === socket.id) {
+        const itsMe = (player.id === socket.id)
+        if (itsMe) {
             for (let key in myInput) keyboard[key] = myInput[key]
         }
 
-        if (keyboard.left) player.x -= speed
-        if (keyboard.right) player.x += speed
-        if (keyboard.up) player.y -= speed
-        if (keyboard.down) player.y += speed
+        if ((config.cspOnSelf && itsMe) ||
+            (config.cspOnOtherPlayers && config.maxOtherPlayersPrediction <= turnIndex)) {
+            if (keyboard.left) player.x -= speed
+            if (keyboard.right) player.x += speed
+            if (keyboard.up) player.y -= speed
+            if (keyboard.down) player.y += speed
+        }
     })
 
     // enemy logic
-    enemies.forEach(enemy => {
-        enemy.x += enemy.vx
-        enemy.y += enemy.vy
-        if (enemy.x < 0 || WORLD_WIDTH < enemy.x) enemy.vx *= -1
-        if (enemy.y < 0 || WORLD_HEIGHT < enemy.y) enemy.vy *= -1
-    })
+    if (config.cspOnEnemies) {
+        enemies.forEach(enemy => {
+            enemy.x += enemy.vx
+            enemy.y += enemy.vy
+            if (enemy.x < 0 || WORLD_WIDTH < enemy.x) enemy.vx *= -1
+            if (enemy.y < 0 || WORLD_HEIGHT < enemy.y) enemy.vy *= -1
+        })
+    }
 
     // previous turn has been mutated and now contains the next turn
     return previousTurn
@@ -125,7 +144,7 @@ function getPresentState () {
         const nextIndex = turns.length
         const previousTurn = getLastTurn()
         const myInput = inputs[nextIndex - 1]
-        turns.push(predictATurn(previousTurn, myInput))
+        turns.push(predictATurn(previousTurn, myInput, nextIndex))
 
         if (inputs.length < turns.length) {
             // A turn has actually been advanced (not resimulating past ones)
@@ -219,6 +238,7 @@ function render () {
 
     // render ping/clock data
     ctx.save()
+    ctx.translate(0, canvas.height - 190)
     ctx.fillStyle = '#a0a0a0'
     ctx.textAlign = 'right'
     ctx.fillText(`ping: ${ping}`,
