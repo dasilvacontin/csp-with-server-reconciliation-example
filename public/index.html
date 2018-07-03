@@ -38,6 +38,7 @@ let turns = []
 const inputs = []
 let serverStateTs
 let clientStateTs
+let arrivalErrorMarginMs
 
 function shallowCloneObject (obj) {
     const copy = {}
@@ -228,6 +229,8 @@ function render () {
                  canvas.width - 30, 100)
     ctx.fillText(`msAhead: ${serverStateTs - clientStateTs}`,
                  canvas.width - 30, 130)
+    ctx.fillText(`arrivalErrorMarginMs: ${arrivalErrorMarginMs}`,
+                 canvas.width - 30, 160)
     ctx.restore()
 }
 requestAnimationFrame(render)
@@ -286,9 +289,10 @@ socket.on('state', function (newState) {
 
     serverStateTs = Date.now() - ping
     // calculate time when we should have generated the turn
+    arrivalErrorMarginMs = Math.min(Math.max(8, ping/5), TURN_LENGTH/2)
     clientStateTs = serverStateTs
                         - ping
-                        - Math.min(Math.max(8, ping/5), TURN_LENGTH/2) // buffer
+                        - arrivalErrorMarginMs // buffer
     turns = [newState]
 
     // the new "initial/base truth turn" is one ahead from the one we had
